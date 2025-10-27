@@ -6,9 +6,7 @@ import ee
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 from .reducers import (
-    get_spatial_reducer, 
-    reduce_image_over_region,
-    sample_image_at_point,
+    get_spatial_reducer,
     NODATA_VALUE,
     CHIRPS_SCALE
 )
@@ -65,20 +63,18 @@ class CHIRPSExtractor:
             # Get reducer
             reducer = get_spatial_reducer(spatial_stat)
             
-            # Extract daily values
+            # Extract daily values using server-side operations
             def extract_daily(image):
-                if is_point:
-                    value = sample_image_at_point(
-                        image, geometry, self.scale, self.band_name
-                    )
-                else:
-                    value = reduce_image_over_region(
-                        image, geometry, reducer, self.scale, self.band_name
-                    )
+                value = image.reduceRegion(
+                    reducer=reducer,
+                    geometry=geometry,
+                    scale=self.scale,
+                    maxPixels=1e13
+                ).get(self.band_name)
                 
                 return ee.Feature(None, {
                     'date': image.date().format('YYYY-MM-dd'),
-                    'value': value if value is not None else NODATA_VALUE
+                    'rainfall': value
                 })
             
             features = collection.map(extract_daily)
@@ -91,11 +87,17 @@ class CHIRPSExtractor:
             daily_data = []
             for feature in data.get('features', []):
                 props = feature['properties']
-                value = props.get('value', NODATA_VALUE)
+                rainfall = props.get('rainfall')
+                
+                # Handle None/null values
+                if rainfall is None:
+                    value = NODATA_VALUE
+                else:
+                    value = round(float(rainfall), 2)
                 
                 daily_data.append({
                     'date': props['date'],
-                    'precip_mm': round(value, 2) if value != NODATA_VALUE else NODATA_VALUE
+                    'precip_mm': value
                 })
             
             return sorted(daily_data, key=lambda x: x['date'])
