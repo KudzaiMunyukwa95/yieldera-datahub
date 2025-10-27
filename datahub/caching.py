@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 class RequestCache:
     """Simple file-based cache for DataHub requests"""
     
-    def __init__(self, cache_dir: str = "/mnt/data/cache", ttl_hours: int = 24):
+    def __init__(self, cache_dir: str = "/tmp/datahub/cache", ttl_hours: int = 24):
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.ttl = timedelta(hours=ttl_hours)
