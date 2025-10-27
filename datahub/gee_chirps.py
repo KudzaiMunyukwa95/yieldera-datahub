@@ -5,11 +5,6 @@ CHIRPS rainfall data extraction via Google Earth Engine
 import ee
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
-from .reducers import (
-    get_spatial_reducer,
-    NODATA_VALUE,
-    CHIRPS_SCALE
-)
 from .errors import GEEError
 
 
@@ -19,6 +14,9 @@ CHIRPS_BAND = "precipitation"
 CHIRPS_LICENSE = "CC-BY-4.0"
 CHIRPS_CITATION = "Funk, C. et al. (2015). The climate hazards infrared precipitation with stations—a new environmental record for monitoring extremes. Scientific Data, 2, 150066."
 
+# CHIRPS native scale (matches working version)
+CHIRPS_SCALE_METERS = 5566  # ~0.05 degrees at equator
+
 
 class CHIRPSExtractor:
     """Extract CHIRPS rainfall data via Google Earth Engine"""
@@ -26,7 +24,7 @@ class CHIRPSExtractor:
     def __init__(self):
         self.collection_id = CHIRPS_COLLECTION
         self.band_name = CHIRPS_BAND
-        self.scale = CHIRPS_SCALE
+        self.scale = CHIRPS_SCALE_METERS  # Use correct scale like working version
         self.native_resolution_deg = 0.05
         
     def get_timeseries(
@@ -54,19 +52,16 @@ class CHIRPSExtractor:
             GEEError: If extraction fails
         """
         try:
-            # Get collection
+            # Get collection - follow working version pattern exactly
             collection = ee.ImageCollection(self.collection_id) \
-                .filterDate(start_date, end_date) \
                 .filterBounds(geometry) \
+                .filterDate(start_date, end_date) \
                 .select(self.band_name)
             
-            # Get reducer
-            reducer = get_spatial_reducer(spatial_stat)
-            
-            # Extract daily values using server-side operations
-            def extract_daily(image):
+            # Extract daily values using the working pattern
+            def extract_daily_value(image):
                 value = image.reduceRegion(
-                    reducer=reducer,
+                    reducer=ee.Reducer.mean(),  # Use direct reducer like working version
                     geometry=geometry,
                     scale=self.scale,
                     maxPixels=1e13
@@ -77,21 +72,21 @@ class CHIRPSExtractor:
                     'rainfall': value
                 })
             
-            features = collection.map(extract_daily)
+            features = collection.map(extract_daily_value)
             feature_collection = ee.FeatureCollection(features)
             
-            # Retrieve data
+            # Get the data
             data = feature_collection.getInfo()
             
-            # Process results
+            # Process results following working version pattern
             daily_data = []
             for feature in data.get('features', []):
                 props = feature['properties']
                 rainfall = props.get('rainfall')
                 
-                # Handle None/null values
+                # Handle None/null values like working version (0 instead of -999)
                 if rainfall is None:
-                    value = NODATA_VALUE
+                    value = 0.0
                 else:
                     value = round(float(rainfall), 2)
                 
@@ -234,6 +229,6 @@ class CHIRPSExtractor:
             "update_frequency": "daily",
             "license": CHIRPS_LICENSE,
             "citation": CHIRPS_CITATION,
-            "nodata_value": NODATA_VALUE,
+            "nodata_value": 0.0,  # Changed from -999 to match working version
             "dataset_doi": "10.1038/sdata.2015.66"
         }
