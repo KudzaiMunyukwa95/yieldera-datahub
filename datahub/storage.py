@@ -12,7 +12,7 @@ from datetime import datetime
 class FileStorage:
     """Manage file storage for DataHub outputs"""
     
-    def __init__(self, output_dir: str = "/mnt/data/outputs"):
+    def __init__(self, output_dir: str = "/tmp/datahub/outputs"):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
