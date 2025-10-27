@@ -21,7 +21,7 @@ class JobStatus(str, Enum):
 class JobStore:
     """Simple file-based job tracking"""
     
-    def __init__(self, jobs_dir: str = "/mnt/data/jobs"):
+    def __init__(self, jobs_dir: str = "/tmp/datahub/jobs"):
         self.jobs_dir = Path(jobs_dir)
         self.jobs_dir.mkdir(parents=True, exist_ok=True)
         
