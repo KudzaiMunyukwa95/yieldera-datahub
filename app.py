@@ -16,10 +16,13 @@ from datahub import datahub_bp
 # Create Flask app
 app = Flask(__name__)
 
-# Configure CORS (adjust origins as needed)
+# Configure CORS - Allow all origins for testing
+# TODO: Restrict to specific domains in production
 CORS(app, resources={
     r"/api/*": {
-        "origins": ["https://yieldera.co.zw", "https://*.yieldera.co.zw"]
+        "origins": "*",  # Allow all origins for now
+        "methods": ["GET", "POST", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization"]
     }
 })
 
