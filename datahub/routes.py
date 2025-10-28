@@ -183,14 +183,17 @@ def era5land_timeseries():
         end_date = data['date_range']['end']
         spatial_stat = data.get('spatial_stat', 'mean')
         
-        # Validate date range (ERA5 limited to 366 days)
+        # Validate date range (ERA5 limited to 14 days for performance)
         start_dt = datetime.strptime(start_date, '%Y-%m-%d')
         end_dt = datetime.strptime(end_date, '%Y-%m-%d')
         days_diff = (end_dt - start_dt).days
         
-        if days_diff > 366:
+        if days_diff > 14:
             return jsonify({
-                "error": "ERA5-Land limited to 366 days. Please reduce date range."
+                "error": "ERA5-Land limited to 14 days for optimal performance. Please reduce date range.",
+                "suggestion": "For longer periods, make multiple smaller requests or use the statistics endpoint.",
+                "max_days": 14,
+                "requested_days": days_diff
             }), 400
         
         # Extract data
@@ -307,9 +310,12 @@ def smap_timeseries():
         end_dt = datetime.strptime(end_date, '%Y-%m-%d')
         days_diff = (end_dt - start_dt).days
         
-        if days_diff > 366:
+        if days_diff > 14:
             return jsonify({
-                "error": "Date range limited to 366 days for performance. Please reduce range."
+                "error": "SMAP limited to 14 days for optimal performance. Please reduce date range.",
+                "suggestion": "For longer periods, make multiple smaller requests or use the statistics endpoint.",
+                "max_days": 14,
+                "requested_days": days_diff
             }), 400
         
         # Extract data
