@@ -79,7 +79,7 @@ def chirps_timeseries():
         return '', 204
     
     try:
-        from gee_chirps import CHIRPSExtractor
+        from datahub.gee_chirps import CHIRPSExtractor
         
         data = request.get_json()
         
@@ -125,7 +125,7 @@ def era5land_timeseries():
         return '', 204
     
     try:
-        from gee_era5land import ERA5LandExtractor
+        from datahub.gee_era5land import ERA5LandExtractor
         
         data = request.get_json()
         
@@ -175,7 +175,7 @@ def era5land_timeseries():
 @datahub_bp.route('/chirps/geotiff', methods=['POST'])
 def chirps_geotiff():
     """Export CHIRPS as GeoTIFF (async job)"""
-    from jobs import JobStore
+    from datahub.jobs import JobStore
     
     try:
         data = request.get_json()
@@ -199,7 +199,7 @@ def chirps_geotiff():
 @datahub_bp.route('/era5land/geotiff', methods=['POST'])
 def era5land_geotiff():
     """Export ERA5-Land as GeoTIFF (async job)"""
-    from jobs import JobStore
+    from datahub.jobs import JobStore
     
     try:
         data = request.get_json()
@@ -223,7 +223,7 @@ def era5land_geotiff():
 @datahub_bp.route('/jobs/<job_id>/status', methods=['GET'])
 def job_status(job_id):
     """Get job status"""
-    from jobs import JobStore
+    from datahub.jobs import JobStore
     
     job_store = JobStore()
     job = job_store.get_job(job_id)
@@ -237,7 +237,7 @@ def job_status(job_id):
 @datahub_bp.route('/jobs/<job_id>/download', methods=['GET'])
 def job_download(job_id):
     """Download job result"""
-    from jobs import JobStore
+    from datahub.jobs import JobStore
     from flask import redirect
     
     job_store = JobStore()
