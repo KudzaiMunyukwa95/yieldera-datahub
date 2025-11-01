@@ -56,6 +56,7 @@ def list_datasets():
                 "variable": "precipitation",
                 "resolution": "0.05 degrees (~5.5km)",
                 "temporal_coverage": "1981-present",
+                "temporal_resolution": "daily",
                 "update_frequency": "daily"
             },
             {
@@ -64,6 +65,7 @@ def list_datasets():
                 "variable": "temperature_2m",
                 "resolution": "0.1 degrees (~11km)",
                 "temporal_coverage": "1950-present",
+                "temporal_resolution": "hourly (aggregated to daily)",
                 "update_frequency": "~5 days behind"
             },
             {
@@ -72,7 +74,28 @@ def list_datasets():
                 "variables": ["sm_surface", "sm_rootzone"],
                 "resolution": "0.09 degrees (~9km)",
                 "temporal_coverage": "2015-03-31 to present",
+                "temporal_resolution": "3-hourly (aggregated to daily)",
                 "update_frequency": "daily (~3 day latency)"
+            },
+            {
+                "id": "terraclimate",
+                "name": "TerraClimate Monthly Temperature",
+                "variables": ["tmin", "tmax", "tavg"],
+                "resolution": "0.04166 degrees (~4km)",
+                "temporal_coverage": "1958-present",
+                "temporal_resolution": "monthly",
+                "update_frequency": "monthly (~2-3 months lag)",
+                "description": "Fast monthly temperature data - ideal for seasonal analysis"
+            },
+            {
+                "id": "fldas",
+                "name": "FLDAS Monthly Soil Moisture",
+                "variables": ["sm_surface", "sm_rootzone"],
+                "resolution": "0.1 degrees (~11km)",
+                "temporal_coverage": "1982-present",
+                "temporal_resolution": "monthly",
+                "update_frequency": "monthly (~1-2 months lag)",
+                "description": "Fast monthly soil moisture - ideal for seasonal analysis"
             }
         ]
     })
@@ -541,6 +564,432 @@ def smap_metadata():
 
 
 # ============================================================================
+# TERRACLIMATE MONTHLY TEMPERATURE ENDPOINTS
+# ============================================================================
+
+@datahub_bp.route('/terraclimate/timeseries', methods=['POST', 'OPTIONS'])
+def terraclimate_timeseries():
+    """
+    Extract TerraClimate monthly temperature timeseries
+    
+    POST /api/data/terraclimate/timeseries
+    
+    Request Body:
+    {
+        "geometry": {
+            "type": "point",
+            "lat": -17.8249,
+            "lon": 31.0530
+        },
+        "date_range": {
+            "start": "2024-01-01",
+            "end": "2024-12-31"
+        },
+        "spatial_stat": "mean"  // optional: mean, median, max, min, sum
+    }
+    
+    Response:
+    [
+        {
+            "date": "2024-01",
+            "tmin_c": 15.2,
+            "tmax_c": 28.5,
+            "tavg_c": 21.8
+        },
+        ...
+    ]
+    """
+    # Handle preflight OPTIONS request
+    if request.method == 'OPTIONS':
+        return '', 204
+    
+    try:
+        from datahub.gee_terraclimate import TerraClimateExtractor
+        
+        data = request.get_json()
+        
+        # Validate request
+        if not data or 'geometry' not in data or 'date_range' not in data:
+            return jsonify({
+                "error": "Missing required fields: geometry and date_range"
+            }), 400
+        
+        # Parse geometry
+        geometry, is_point = parse_geometry(data['geometry'])
+        
+        # Get parameters
+        start_date = data['date_range']['start']
+        end_date = data['date_range']['end']
+        spatial_stat = data.get('spatial_stat', 'mean')
+        
+        # Validate date range (monthly data, limit to 60 months)
+        start_dt = datetime.strptime(start_date, '%Y-%m-%d')
+        end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+        months_diff = (end_dt.year - start_dt.year) * 12 + end_dt.month - start_dt.month
+        
+        if months_diff > 60:
+            return jsonify({
+                "error": "TerraClimate limited to 60 months for optimal performance. Please reduce date range.",
+                "max_months": 60,
+                "requested_months": months_diff
+            }), 400
+        
+        # Extract data
+        extractor = TerraClimateExtractor()
+        timeseries = extractor.get_timeseries(
+            geometry=geometry,
+            start_date=start_date,
+            end_date=end_date,
+            spatial_stat=spatial_stat,
+            is_point=is_point
+        )
+        
+        return jsonify(timeseries), 200
+        
+    except ValueError as e:
+        return jsonify({"error": f"Invalid input: {str(e)}"}), 400
+    except Exception as e:
+        print(f"TerraClimate Error: {str(e)}")
+        return jsonify({"error": f"Server error: {str(e)}"}), 500
+
+
+@datahub_bp.route('/terraclimate/statistics', methods=['POST', 'OPTIONS'])
+def terraclimate_statistics():
+    """
+    Get summary statistics for TerraClimate temperature over a time period
+    
+    POST /api/data/terraclimate/statistics
+    
+    Request Body:
+    {
+        "geometry": {
+            "type": "point",
+            "lat": -17.8249,
+            "lon": 31.0530
+        },
+        "date_range": {
+            "start": "2020-01-01",
+            "end": "2024-12-31"
+        },
+        "spatial_stat": "mean"
+    }
+    
+    Response:
+    {
+        "tmin": {
+            "mean": 16.3,
+            "min": 15.2,
+            "max": 17.5,
+            "median": 16.1,
+            "num_months": 60
+        },
+        "tmax": {
+            "mean": 29.3,
+            "min": 28.5,
+            "max": 30.1,
+            "median": 29.2,
+            "num_months": 60
+        },
+        "tavg": {
+            "mean": 22.8,
+            "min": 21.8,
+            "max": 23.8,
+            "median": 22.6,
+            "num_months": 60
+        },
+        "date_range": {
+            "start": "2020-01",
+            "end": "2024-12",
+            "total_months": 60
+        }
+    }
+    """
+    # Handle preflight OPTIONS request
+    if request.method == 'OPTIONS':
+        return '', 204
+    
+    try:
+        from datahub.gee_terraclimate import TerraClimateExtractor
+        
+        data = request.get_json()
+        
+        # Validate request
+        if not data or 'geometry' not in data or 'date_range' not in data:
+            return jsonify({
+                "error": "Missing required fields: geometry and date_range"
+            }), 400
+        
+        # Parse geometry
+        geometry, is_point = parse_geometry(data['geometry'])
+        
+        # Get parameters
+        start_date = data['date_range']['start']
+        end_date = data['date_range']['end']
+        spatial_stat = data.get('spatial_stat', 'mean')
+        
+        # Extract data
+        extractor = TerraClimateExtractor()
+        statistics = extractor.get_statistics(
+            geometry=geometry,
+            start_date=start_date,
+            end_date=end_date,
+            spatial_stat=spatial_stat,
+            is_point=is_point
+        )
+        
+        return jsonify(statistics), 200
+        
+    except ValueError as e:
+        return jsonify({"error": f"Invalid input: {str(e)}"}), 400
+    except Exception as e:
+        print(f"TerraClimate Statistics Error: {str(e)}")
+        return jsonify({"error": f"Server error: {str(e)}"}), 500
+
+
+@datahub_bp.route('/terraclimate/metadata', methods=['GET', 'OPTIONS'])
+def terraclimate_metadata():
+    """
+    Get TerraClimate dataset metadata
+    
+    GET /api/data/terraclimate/metadata
+    
+    Response:
+    {
+        "source": "GEE: IDAHO_EPSCOR/TERRACLIMATE",
+        "variables": ["tmin", "tmax", "tavg"],
+        "units": "degrees Celsius",
+        "native_resolution_km": 4,
+        "temporal_coverage": "1958-present",
+        ...
+    }
+    """
+    # Handle preflight OPTIONS request
+    if request.method == 'OPTIONS':
+        return '', 204
+    
+    try:
+        from datahub.gee_terraclimate import TerraClimateExtractor
+        
+        extractor = TerraClimateExtractor()
+        metadata = extractor.get_metadata()
+        
+        return jsonify(metadata), 200
+        
+    except Exception as e:
+        print(f"TerraClimate Metadata Error: {str(e)}")
+        return jsonify({"error": f"Server error: {str(e)}"}), 500
+
+
+# ============================================================================
+# FLDAS MONTHLY SOIL MOISTURE ENDPOINTS
+# ============================================================================
+
+@datahub_bp.route('/fldas/timeseries', methods=['POST', 'OPTIONS'])
+def fldas_timeseries():
+    """
+    Extract FLDAS monthly soil moisture timeseries
+    
+    POST /api/data/fldas/timeseries
+    
+    Request Body:
+    {
+        "geometry": {
+            "type": "point",
+            "lat": -17.8249,
+            "lon": 31.0530
+        },
+        "date_range": {
+            "start": "2024-01-01",
+            "end": "2024-12-31"
+        },
+        "spatial_stat": "mean"  // optional: mean, median, max, min, sum
+    }
+    
+    Response:
+    [
+        {
+            "date": "2024-01",
+            "sm_surface": 15.2,
+            "sm_rootzone": 25.8
+        },
+        ...
+    ]
+    """
+    # Handle preflight OPTIONS request
+    if request.method == 'OPTIONS':
+        return '', 204
+    
+    try:
+        from datahub.gee_fldas import FLDASExtractor
+        
+        data = request.get_json()
+        
+        # Validate request
+        if not data or 'geometry' not in data or 'date_range' not in data:
+            return jsonify({
+                "error": "Missing required fields: geometry and date_range"
+            }), 400
+        
+        # Parse geometry
+        geometry, is_point = parse_geometry(data['geometry'])
+        
+        # Get parameters
+        start_date = data['date_range']['start']
+        end_date = data['date_range']['end']
+        spatial_stat = data.get('spatial_stat', 'mean')
+        
+        # Validate date range (monthly data, limit to 60 months)
+        start_dt = datetime.strptime(start_date, '%Y-%m-%d')
+        end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+        months_diff = (end_dt.year - start_dt.year) * 12 + end_dt.month - start_dt.month
+        
+        if months_diff > 60:
+            return jsonify({
+                "error": "FLDAS limited to 60 months for optimal performance. Please reduce date range.",
+                "max_months": 60,
+                "requested_months": months_diff
+            }), 400
+        
+        # Extract data
+        extractor = FLDASExtractor()
+        timeseries = extractor.get_timeseries(
+            geometry=geometry,
+            start_date=start_date,
+            end_date=end_date,
+            spatial_stat=spatial_stat,
+            is_point=is_point
+        )
+        
+        return jsonify(timeseries), 200
+        
+    except ValueError as e:
+        return jsonify({"error": f"Invalid input: {str(e)}"}), 400
+    except Exception as e:
+        print(f"FLDAS Error: {str(e)}")
+        return jsonify({"error": f"Server error: {str(e)}"}), 500
+
+
+@datahub_bp.route('/fldas/statistics', methods=['POST', 'OPTIONS'])
+def fldas_statistics():
+    """
+    Get summary statistics for FLDAS soil moisture over a time period
+    
+    POST /api/data/fldas/statistics
+    
+    Request Body:
+    {
+        "geometry": {
+            "type": "point",
+            "lat": -17.8249,
+            "lon": 31.0530
+        },
+        "date_range": {
+            "start": "2020-01-01",
+            "end": "2024-12-31"
+        },
+        "spatial_stat": "mean"
+    }
+    
+    Response:
+    {
+        "sm_surface": {
+            "mean": 15.2,
+            "min": 12.3,
+            "max": 18.5,
+            "median": 15.1,
+            "num_months": 60
+        },
+        "sm_rootzone": {
+            "mean": 25.8,
+            "min": 22.1,
+            "max": 28.9,
+            "median": 25.5,
+            "num_months": 60
+        },
+        "date_range": {
+            "start": "2020-01",
+            "end": "2024-12",
+            "total_months": 60
+        }
+    }
+    """
+    # Handle preflight OPTIONS request
+    if request.method == 'OPTIONS':
+        return '', 204
+    
+    try:
+        from datahub.gee_fldas import FLDASExtractor
+        
+        data = request.get_json()
+        
+        # Validate request
+        if not data or 'geometry' not in data or 'date_range' not in data:
+            return jsonify({
+                "error": "Missing required fields: geometry and date_range"
+            }), 400
+        
+        # Parse geometry
+        geometry, is_point = parse_geometry(data['geometry'])
+        
+        # Get parameters
+        start_date = data['date_range']['start']
+        end_date = data['date_range']['end']
+        spatial_stat = data.get('spatial_stat', 'mean')
+        
+        # Extract data
+        extractor = FLDASExtractor()
+        statistics = extractor.get_statistics(
+            geometry=geometry,
+            start_date=start_date,
+            end_date=end_date,
+            spatial_stat=spatial_stat,
+            is_point=is_point
+        )
+        
+        return jsonify(statistics), 200
+        
+    except ValueError as e:
+        return jsonify({"error": f"Invalid input: {str(e)}"}), 400
+    except Exception as e:
+        print(f"FLDAS Statistics Error: {str(e)}")
+        return jsonify({"error": f"Server error: {str(e)}"}), 500
+
+
+@datahub_bp.route('/fldas/metadata', methods=['GET', 'OPTIONS'])
+def fldas_metadata():
+    """
+    Get FLDAS dataset metadata
+    
+    GET /api/data/fldas/metadata
+    
+    Response:
+    {
+        "source": "GEE: NASA/FLDAS/NOAH01/C/GL/M/V001",
+        "variables": ["sm_surface", "sm_rootzone"],
+        "units": "percent (%)",
+        "native_resolution_km": 11,
+        "temporal_coverage": "1982-present",
+        ...
+    }
+    """
+    # Handle preflight OPTIONS request
+    if request.method == 'OPTIONS':
+        return '', 204
+    
+    try:
+        from datahub.gee_fldas import FLDASExtractor
+        
+        extractor = FLDASExtractor()
+        metadata = extractor.get_metadata()
+        
+        return jsonify(metadata), 200
+        
+    except Exception as e:
+        print(f"FLDAS Metadata Error: {str(e)}")
+        return jsonify({"error": f"Server error: {str(e)}"}), 500
+
+
+# ============================================================================
 # JOB MANAGEMENT ENDPOINTS
 # ============================================================================
 
@@ -667,7 +1116,7 @@ def compare_timeseries():
         spatial_stat = data.get('spatial_stat', 'mean')
         
         # Validate dataset
-        valid_datasets = ['chirps', 'era5land', 'smap']
+        valid_datasets = ['chirps', 'era5land', 'smap', 'terraclimate', 'fldas']
         if dataset not in valid_datasets:
             return jsonify({
                 "error": f"Invalid dataset. Must be one of: {', '.join(valid_datasets)}"
@@ -688,6 +1137,14 @@ def compare_timeseries():
         elif dataset == 'smap':
             from datahub.gee_smap import SMAPExtractor
             extractor = SMAPExtractor()
+            variable_name = 'soil_moisture'
+        elif dataset == 'terraclimate':
+            from datahub.gee_terraclimate import TerraClimateExtractor
+            extractor = TerraClimateExtractor()
+            variable_name = 'temperature'
+        elif dataset == 'fldas':
+            from datahub.gee_fldas import FLDASExtractor
+            extractor = FLDASExtractor()
             variable_name = 'soil_moisture'
         
         # Extract data for period 1
@@ -763,11 +1220,11 @@ def calculate_statistics(data, dataset):
     # Extract values based on dataset
     if dataset == 'chirps':
         values = [d.get('precip_mm', 0) for d in data if d.get('precip_mm') is not None]
-    elif dataset == 'era5land':
+    elif dataset == 'era5land' or dataset == 'terraclimate':
         # For temperature, use average temperature
         values = [d.get('tavg_c', 0) for d in data if d.get('tavg_c') is not None]
-    elif dataset == 'smap':
-        # For SMAP, use root zone as primary indicator
+    elif dataset == 'smap' or dataset == 'fldas':
+        # For soil moisture, use root zone as primary indicator
         values = [d.get('sm_rootzone', 0) for d in data if d.get('sm_rootzone') is not None]
     
     if not values:
@@ -820,7 +1277,7 @@ def calculate_comparison(stats_1, stats_2, dataset):
         
         interpretation = f"Period 2 had {abs(mean_pct):.1f}% {'less' if mean_pct < 0 else 'more'} rainfall than Period 1 ({abs(sum_diff):.1f}mm difference)."
     
-    elif dataset == 'era5land':
+    elif dataset == 'era5land' or dataset == 'terraclimate':
         # For temperature, higher can be worse (heat stress)
         if mean_pct > 10:
             status = "Period 2 is much hotter"
@@ -840,7 +1297,7 @@ def calculate_comparison(stats_1, stats_2, dataset):
         
         interpretation = f"Period 2 was {abs(mean_diff):.1f}°C {'warmer' if mean_diff > 0 else 'cooler'} than Period 1."
     
-    elif dataset == 'smap':
+    elif dataset == 'smap' or dataset == 'fldas':
         # For soil moisture, lower is worse
         if mean_pct < -30:
             status = "Period 2 is much drier"
@@ -890,11 +1347,11 @@ def align_timeseries(data_1, data_2, dataset):
             value_1 = item_1.get('precip_mm')
             value_2 = item_2.get('precip_mm')
             variable = 'precip_mm'
-        elif dataset == 'era5land':
+        elif dataset == 'era5land' or dataset == 'terraclimate':
             value_1 = item_1.get('tavg_c')
             value_2 = item_2.get('tavg_c')
             variable = 'tavg_c'
-        elif dataset == 'smap':
+        elif dataset == 'smap' or dataset == 'fldas':
             value_1 = item_1.get('sm_rootzone')
             value_2 = item_2.get('sm_rootzone')
             variable = 'sm_rootzone'
