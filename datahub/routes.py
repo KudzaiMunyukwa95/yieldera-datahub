@@ -582,3 +582,336 @@ def job_download(job_id):
         return redirect(job['download_urls']['tif'])
     
     return jsonify({"error": "Download not available"}), 404
+
+
+# ============================================================================
+# COMPARISON/PHASE ANALYSIS ENDPOINT
+# ============================================================================
+
+@datahub_bp.route('/compare/timeseries', methods=['POST', 'OPTIONS'])
+def compare_timeseries():
+    """
+    Compare two time periods for any dataset (phase analysis)
+    
+    POST /api/data/compare/timeseries
+    
+    Request Body:
+    {
+        "dataset": "smap",  // or "chirps", "era5land"
+        "geometry": {
+            "type": "point",
+            "lat": -17.8249,
+            "lon": 31.0530
+        },
+        "period_1": {
+            "start": "2022-11-01",
+            "end": "2022-11-30",
+            "label": "November 2022"  // optional
+        },
+        "period_2": {
+            "start": "2023-11-01",
+            "end": "2023-11-30",
+            "label": "November 2023"  // optional
+        },
+        "spatial_stat": "mean"
+    }
+    
+    Response:
+    {
+        "dataset": "smap",
+        "period_1": {
+            "label": "November 2022",
+            "data": [...],
+            "statistics": {"mean": 24.3, "min": 18.5, ...}
+        },
+        "period_2": {
+            "label": "November 2023",
+            "data": [...],
+            "statistics": {"mean": 18.5, "min": 12.3, ...}
+        },
+        "comparison": {
+            "mean_difference": -5.8,
+            "mean_percent_change": -23.9,
+            "status": "Period 2 is drier",
+            "severity": "moderate",
+            "interpretation": "Period 2 had 23.9% less soil moisture..."
+        },
+        "aligned_data": [
+            {"day": 1, "value_1": 34.2, "value_2": 28.4, "difference": -5.8},
+            ...
+        ]
+    }
+    """
+    
+    # Handle preflight OPTIONS request
+    if request.method == 'OPTIONS':
+        return '', 204
+    
+    try:
+        import numpy as np
+        
+        data = request.get_json()
+        
+        # Validate request
+        required_fields = ['dataset', 'geometry', 'period_1', 'period_2']
+        if not all(field in data for field in required_fields):
+            return jsonify({
+                "error": "Missing required fields",
+                "required": required_fields
+            }), 400
+        
+        dataset = data['dataset']
+        geometry_data = data['geometry']
+        period_1 = data['period_1']
+        period_2 = data['period_2']
+        spatial_stat = data.get('spatial_stat', 'mean')
+        
+        # Validate dataset
+        valid_datasets = ['chirps', 'era5land', 'smap']
+        if dataset not in valid_datasets:
+            return jsonify({
+                "error": f"Invalid dataset. Must be one of: {', '.join(valid_datasets)}"
+            }), 400
+        
+        # Parse geometry
+        geometry, is_point = parse_geometry(geometry_data)
+        
+        # Import appropriate extractor
+        if dataset == 'chirps':
+            from datahub.gee_chirps import CHIRPSExtractor
+            extractor = CHIRPSExtractor()
+            variable_name = 'precipitation'
+        elif dataset == 'era5land':
+            from datahub.gee_era5land import ERA5LandExtractor
+            extractor = ERA5LandExtractor()
+            variable_name = 'temperature'
+        elif dataset == 'smap':
+            from datahub.gee_smap import SMAPExtractor
+            extractor = SMAPExtractor()
+            variable_name = 'soil_moisture'
+        
+        # Extract data for period 1
+        print(f"Extracting {dataset} data for period 1: {period_1['start']} to {period_1['end']}")
+        data_1 = extractor.get_timeseries(
+            geometry=geometry,
+            start_date=period_1['start'],
+            end_date=period_1['end'],
+            spatial_stat=spatial_stat,
+            is_point=is_point
+        )
+        
+        # Extract data for period 2
+        print(f"Extracting {dataset} data for period 2: {period_2['start']} to {period_2['end']}")
+        data_2 = extractor.get_timeseries(
+            geometry=geometry,
+            start_date=period_2['start'],
+            end_date=period_2['end'],
+            spatial_stat=spatial_stat,
+            is_point=is_point
+        )
+        
+        # Calculate statistics for each period
+        stats_1 = calculate_statistics(data_1, dataset)
+        stats_2 = calculate_statistics(data_2, dataset)
+        
+        # Calculate comparison metrics
+        comparison = calculate_comparison(stats_1, stats_2, dataset)
+        
+        # Align data by day of month for comparison
+        aligned_data = align_timeseries(data_1, data_2, dataset)
+        
+        # Build response
+        response = {
+            "dataset": dataset,
+            "variable": variable_name,
+            "period_1": {
+                "label": period_1.get('label', f"{period_1['start']} to {period_1['end']}"),
+                "start": period_1['start'],
+                "end": period_1['end'],
+                "data": data_1,
+                "statistics": stats_1
+            },
+            "period_2": {
+                "label": period_2.get('label', f"{period_2['start']} to {period_2['end']}"),
+                "start": period_2['start'],
+                "end": period_2['end'],
+                "data": data_2,
+                "statistics": stats_2
+            },
+            "comparison": comparison,
+            "aligned_data": aligned_data
+        }
+        
+        return jsonify(response), 200
+        
+    except ValueError as e:
+        return jsonify({"error": f"Invalid input: {str(e)}"}), 400
+    except Exception as e:
+        print(f"Comparison Error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": f"Server error: {str(e)}"}), 500
+
+
+def calculate_statistics(data, dataset):
+    """Calculate statistics for a timeseries dataset"""
+    import numpy as np
+    
+    if not data:
+        return None
+    
+    # Extract values based on dataset
+    if dataset == 'chirps':
+        values = [d.get('precip_mm', 0) for d in data if d.get('precip_mm') is not None]
+    elif dataset == 'era5land':
+        # For temperature, use average temperature
+        values = [d.get('tavg_c', 0) for d in data if d.get('tavg_c') is not None]
+    elif dataset == 'smap':
+        # For SMAP, use root zone as primary indicator
+        values = [d.get('sm_rootzone', 0) for d in data if d.get('sm_rootzone') is not None]
+    
+    if not values:
+        return None
+    
+    return {
+        "mean": round(float(np.mean(values)), 2),
+        "min": round(float(np.min(values)), 2),
+        "max": round(float(np.max(values)), 2),
+        "median": round(float(np.median(values)), 2),
+        "std": round(float(np.std(values)), 2),
+        "sum": round(float(np.sum(values)), 2),
+        "num_days": len(values)
+    }
+
+
+def calculate_comparison(stats_1, stats_2, dataset):
+    """Calculate comparison metrics between two periods"""
+    
+    if not stats_1 or not stats_2:
+        return {
+            "error": "Cannot compare - missing data for one or both periods"
+        }
+    
+    # Calculate differences
+    mean_diff = stats_2['mean'] - stats_1['mean']
+    mean_pct = (mean_diff / stats_1['mean'] * 100) if stats_1['mean'] != 0 else 0
+    
+    median_diff = stats_2['median'] - stats_1['median']
+    sum_diff = stats_2['sum'] - stats_1['sum']
+    
+    # Determine status and severity
+    if dataset == 'chirps':
+        # For rainfall, lower is worse
+        if mean_pct < -30:
+            status = "Period 2 is much drier"
+            severity = "severe"
+        elif mean_pct < -15:
+            status = "Period 2 is drier"
+            severity = "moderate"
+        elif mean_pct > 30:
+            status = "Period 2 is much wetter"
+            severity = "high"
+        elif mean_pct > 15:
+            status = "Period 2 is wetter"
+            severity = "moderate"
+        else:
+            status = "Periods are similar"
+            severity = "none"
+        
+        interpretation = f"Period 2 had {abs(mean_pct):.1f}% {'less' if mean_pct < 0 else 'more'} rainfall than Period 1 ({abs(sum_diff):.1f}mm difference)."
+    
+    elif dataset == 'era5land':
+        # For temperature, higher can be worse (heat stress)
+        if mean_pct > 10:
+            status = "Period 2 is much hotter"
+            severity = "severe"
+        elif mean_pct > 5:
+            status = "Period 2 is hotter"
+            severity = "moderate"
+        elif mean_pct < -10:
+            status = "Period 2 is much cooler"
+            severity = "severe"
+        elif mean_pct < -5:
+            status = "Period 2 is cooler"
+            severity = "moderate"
+        else:
+            status = "Periods are similar"
+            severity = "none"
+        
+        interpretation = f"Period 2 was {abs(mean_diff):.1f}°C {'warmer' if mean_diff > 0 else 'cooler'} than Period 1."
+    
+    elif dataset == 'smap':
+        # For soil moisture, lower is worse
+        if mean_pct < -30:
+            status = "Period 2 is much drier"
+            severity = "severe"
+        elif mean_pct < -15:
+            status = "Period 2 is drier"
+            severity = "moderate"
+        elif mean_pct > 30:
+            status = "Period 2 is much wetter"
+            severity = "high"
+        elif mean_pct > 15:
+            status = "Period 2 is wetter"
+            severity = "moderate"
+        else:
+            status = "Periods are similar"
+            severity = "none"
+        
+        interpretation = f"Period 2 had {abs(mean_pct):.1f}% {'less' if mean_pct < 0 else 'more'} soil moisture than Period 1, indicating significantly {'drier' if mean_pct < 0 else 'wetter'} conditions."
+    
+    return {
+        "mean_difference": round(mean_diff, 2),
+        "mean_percent_change": round(mean_pct, 2),
+        "median_difference": round(median_diff, 2),
+        "sum_difference": round(sum_diff, 2),
+        "status": status,
+        "severity": severity,
+        "interpretation": interpretation,
+        "period_1_mean": stats_1['mean'],
+        "period_2_mean": stats_2['mean']
+    }
+
+
+def align_timeseries(data_1, data_2, dataset):
+    """Align two timeseries by day of month for comparison"""
+    
+    aligned = []
+    
+    # Get the shorter length
+    min_length = min(len(data_1), len(data_2))
+    
+    for i in range(min_length):
+        item_1 = data_1[i]
+        item_2 = data_2[i]
+        
+        # Extract values based on dataset
+        if dataset == 'chirps':
+            value_1 = item_1.get('precip_mm')
+            value_2 = item_2.get('precip_mm')
+            variable = 'precip_mm'
+        elif dataset == 'era5land':
+            value_1 = item_1.get('tavg_c')
+            value_2 = item_2.get('tavg_c')
+            variable = 'tavg_c'
+        elif dataset == 'smap':
+            value_1 = item_1.get('sm_rootzone')
+            value_2 = item_2.get('sm_rootzone')
+            variable = 'sm_rootzone'
+        
+        if value_1 is not None and value_2 is not None:
+            difference = value_2 - value_1
+            percent_change = (difference / value_1 * 100) if value_1 != 0 else 0
+            
+            aligned.append({
+                "day": i + 1,
+                "date_1": item_1.get('date'),
+                "date_2": item_2.get('date'),
+                "value_1": round(value_1, 2),
+                "value_2": round(value_2, 2),
+                "difference": round(difference, 2),
+                "percent_change": round(percent_change, 2),
+                "variable": variable
+            })
+    
+    return aligned
